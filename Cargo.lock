@@ -1779,6 +1779,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6548a0ad5d2549e111e1f6a11a6c2e2d00ce6a3dafe22948d67c2b443f775e52"
 
 [[package]]
+name = "crop"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57e7b88784eea5a7895d70cde2535b36030ae387adde16a1d5c962c5ec5f273f"
+dependencies = [
+ "str_indices",
+]
+
+[[package]]
 name = "crossbeam"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3802,6 +3811,12 @@ checksum = "3a1853e40333206f9a685358046d13ab200169e3ee573019bddf0ede0dc29307"
 dependencies = [
  "serde_json",
 ]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7725c320caac8c21d8228c1d055af27a995d371f78cc763073d3e068323641b5"
 
 [[package]]
 name = "kernel32-sys"
@@ -7120,6 +7135,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "str_indices"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9557cb6521e8d009c51a8666f09356f4b817ba9ba0981a305bd86aee47bd35c"
+
+[[package]]
 name = "string_cache"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7273,7 +7294,7 @@ dependencies = [
  "dashmap",
  "either",
  "indexmap 1.9.3",
- "jsonc-parser",
+ "jsonc-parser 0.21.0",
  "lru",
  "napi",
  "napi-derive",
@@ -9668,7 +9689,7 @@ dependencies = [
  "futures-retry",
  "include_dir",
  "indexmap 1.9.3",
- "jsonc-parser",
+ "jsonc-parser 0.21.0",
  "mime",
  "notify 4.0.17",
  "parking_lot",
@@ -10656,7 +10677,7 @@ dependencies = [
  "is-terminal",
  "itertools",
  "json_comments",
- "jsonc-parser",
+ "jsonc-parser 0.21.0",
  "lazy-regex",
  "lazy_static",
  "libc",
@@ -10750,7 +10771,10 @@ dependencies = [
 name = "turborepo-lsp"
 version = "0.1.0"
 dependencies = [
+ "crop",
  "futures",
+ "itertools",
+ "jsonc-parser 0.23.0",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -10759,6 +10783,8 @@ dependencies = [
  "tower-uds",
  "tracing",
  "tracing-subscriber",
+ "turborepo-lib",
+ "wax",
 ]
 
 [[package]]

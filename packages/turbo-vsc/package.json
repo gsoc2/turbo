@@ -6,7 +6,7 @@
   "publisher": "Turborepo",
   "scripts": {
     "vscode:prepublish": "npm run esbuild-base -- --minify",
-    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/main.js --external:vscode --format=cjs --platform=node",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --main-fields=module,main --outfile=out/main.js --external:vscode --format=cjs --platform=node",
     "esbuild": "npm run esbuild-base -- --sourcemap",
     "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
     "test-compile": "tsc -p ./"
@@ -15,6 +15,7 @@
   "author": "Alexander Lyon",
   "license": "ISC",
   "dependencies": {
+    "jsonc-parser": "^3.2.0",
     "vscode-languageclient": "^9.0.1"
   },
   "engines": {
@@ -28,9 +29,20 @@
   "contributes": {
     "commands": [
       {
-        "command": "turbo.startDaemon",
+        "command": "turbo.daemon.start",
         "title": "Start the Turborepo Daemon"
+      },
+      {
+        "command": "turbo.daemon.stop",
+        "title": "Stop the Turborepo Daemon"
+      },
+      {
+        "command": "turbo.daemon.status",
+        "title": "Get the status of the Turborepo Daemon"
       }
     ]
-  }
+  },
+  "activationEvents": [
+    "workspaceContains:**/turbo.json"
+  ]
 }

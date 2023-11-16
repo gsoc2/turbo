@@ -6,6 +6,7 @@ mod target_selector;
 use std::collections::HashSet;
 
 use filter::{FilterResolver, PackageInference};
+pub use target_selector::TargetSelector;
 use turbopath::AbsoluteSystemPath;
 use turborepo_repository::package_graph::{PackageGraph, WorkspaceName};
 use turborepo_scm::SCM;
