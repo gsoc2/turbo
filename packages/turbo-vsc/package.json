@@ -9,9 +9,16 @@
     "esbuild-base": "esbuild ./src/extension.ts --bundle --main-fields=module,main --outfile=out/main.js --external:vscode --format=cjs --platform=node",
     "esbuild": "npm run esbuild-base -- --sourcemap",
     "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
+    "package": "pnpm vsce package --no-dependencies",
+    "publish": "pnpm vsce publish --no-dependencies",
     "test-compile": "tsc -p ./"
   },
   "keywords": [],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vercel/turbo",
+    "directory": "packages/turbo-vsc"
+  },
   "author": "Alexander Lyon",
   "license": "ISC",
   "dependencies": {
@@ -19,7 +26,7 @@
     "vscode-languageclient": "^9.0.1"
   },
   "engines": {
-    "vscode": "^1.22.0"
+    "vscode": "^1.84.2"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",

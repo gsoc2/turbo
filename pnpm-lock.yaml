@@ -1077,6 +1077,9 @@ importers:
 
   packages/turbo-vsc:
     dependencies:
+      jsonc-parser:
+        specifier: ^3.2.0
+        version: 3.2.0
       vscode-languageclient:
         specifier: ^9.0.1
         version: 9.0.1

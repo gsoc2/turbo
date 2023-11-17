@@ -18,6 +18,7 @@ use turborepo_repository::{
 #[derive(Debug)]
 pub struct Backend {
     pub client: Client,
+    repo_root: Arc<Mutex<Option<AbsoluteSystemPathBuf>>>,
     files: Mutex<HashMap<Url, crop::Rope>>,
     initializer: tokio::sync::watch::Sender<Option<Arc<AsyncMutex<DaemonClient<DaemonConnector>>>>>,
     discovery: tokio::sync::watch::Receiver<Option<Arc<AsyncMutex<DaemonClient<DaemonConnector>>>>>,
@@ -32,6 +33,8 @@ impl LanguageServer for Backend {
                 uri.to_file_path().unwrap().as_os_str().to_str().unwrap(),
             )
             .unwrap();
+
+            self.repo_root.lock().unwrap().replace(repo_root.clone());
 
             let hasher = DaemonRootHasher::new(&repo_root);
 
@@ -175,12 +178,20 @@ impl LanguageServer for Backend {
             .await;
 
         let packages = self.package_discovery().await;
+        let repo_root = self.repo_root.lock().unwrap().clone().unwrap();
 
         let mut locations = vec![];
         for wd in packages {
             let data = std::fs::read_to_string(&wd.package_json).unwrap();
             let package_json = PackageJson::from_str(&data).unwrap();
             let scripts = package_json.scripts.into_keys().collect::<HashSet<_>>();
+
+            // if in the root, the name should be '//'
+            let package_json_name = if repo_root.contains(&wd.package_json) {
+                Some("//")
+            } else {
+                package_json.name.as_ref().map(|s| s.as_str())
+            };
 
             // todo: use jsonc_ast instead of text search
             let rope = crop::Rope::from(data.clone());
@@ -191,7 +202,7 @@ impl LanguageServer for Backend {
                     .map(|(p, t)| (Some(p), t))
                     .unwrap_or((None, task));
 
-                if let (Some(package), Some(package_name)) = (package, package_json.name.as_ref()) {
+                if let (Some(package), Some(package_name)) = (package, package_json_name) {
                     if package_name != package {
                         continue;
                     }
@@ -471,6 +482,7 @@ impl Backend {
 
         Self {
             client,
+            repo_root: Arc::new(Mutex::new(None)),
             files: Mutex::new(HashMap::new()),
             initializer: rx,
             discovery: tx,
@@ -509,17 +521,36 @@ impl Backend {
 
         let packages = self.package_discovery().await;
 
+        self.client
+            .log_message(MessageType::INFO, format!("{:#?}", packages))
+            .await;
+
+        let repo_root = self.repo_root.lock().unwrap().clone().unwrap();
+
         let tasks = packages
             .into_iter()
             .map(|wd| {
                 let package_json = PackageJson::load(&wd.package_json).unwrap();
+                let package_json_name = if repo_root.contains(&wd.package_json) {
+                    Some("//".to_string())
+                } else {
+                    package_json.name
+                };
                 package_json
                     .scripts
                     .into_keys()
-                    .map(move |k| (k, package_json.name.clone()))
+                    .map(move |k| (k, package_json_name.clone()))
             })
             .flatten()
             .into_group_map();
+
+        let package_names = tasks
+            .values()
+            .flatten()
+            .flatten()
+            .map(|s| s.as_str())
+            .unique()
+            .collect::<HashSet<_>>();
 
         {
             let parse =
@@ -561,19 +592,30 @@ impl Backend {
                     .map(|(p, t)| (Some(p), t))
                     .unwrap_or((None, property.name.as_str()));
 
+                let mut object_range = property.range;
+                object_range.start += 1; // account for quote
+                let object_key_range = object_range.start + property.name.as_str().len();
+                object_range.end = object_key_range;
+
                 match (tasks.get(task), package) {
-                    // task exists and we have a package, then check it
+                    // we specified a package, but that package doesn't exist
+                    (_, Some(package)) if !package_names.contains(&package) => {
+                        diagnostics.push(Diagnostic {
+                            message: format!("The package `{}` does not exist.", package),
+                            range: convert_ranges(&rope, object_range),
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String("turbo:no-such-package".to_string())),
+                            ..Default::default()
+                        });
+                    }
+                    // that task exists, and we have a package defined, but the task doesn't exist
+                    // in that package
                     (Some(list), Some(package))
                         if !list
                             .iter()
                             .filter_map(|s| s.as_ref().map(|s| s.as_str()))
                             .contains(&package) =>
                     {
-                        let mut object_range = property.range;
-                        object_range.start += 1; // account for quote
-                        let object_key_range = object_range.start + property.name.as_str().len();
-                        object_range.end = object_key_range;
-
                         diagnostics.push(Diagnostic {
                             message: format!(
                                 "The task `{}` does not exist in the package `{}`.",
@@ -581,30 +623,24 @@ impl Backend {
                             ),
                             range: convert_ranges(&rope, object_range),
                             severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "turbo:no-such-task-in-package".to_string(),
+                            )),
                             ..Default::default()
                         });
                     }
                     // the task doesn't exist anywhere, so we have a problem
                     (None, None) => {
-                        let mut object_range = property.range;
-                        object_range.start += 1; // account for quote
-                        let object_key_range = object_range.start + property.name.as_str().len();
-                        object_range.end = object_key_range;
-
                         diagnostics.push(Diagnostic {
                             message: format!("The task `{}` does not exist.", task),
                             range: convert_ranges(&rope, object_range),
-                            severity: Some(DiagnosticSeverity::ERROR),
+                            severity: Some(DiagnosticSeverity::WARNING),
+                            code: Some(NumberOrString::String("turbo:no-such-task".to_string())),
                             ..Default::default()
                         });
                     }
                     // we have specified a package, but the task doesn't exist at all
                     (None, Some(package)) => {
-                        let mut object_range = property.range;
-                        object_range.start += 1; // account for quote
-                        let object_key_range = object_range.start + property.name.as_str().len();
-                        object_range.end = object_key_range;
-
                         diagnostics.push(Diagnostic {
                             message: format!(
                                 "The task `{}` does not exist in the package `{}`.",
@@ -612,6 +648,7 @@ impl Backend {
                             ),
                             range: convert_ranges(&rope, object_range),
                             severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String("turbo:no-such-task".to_string())),
                             ..Default::default()
                         });
                     }
@@ -683,7 +720,8 @@ impl Backend {
             for glob in globs {
                 // read string and parse glob
                 if let Some(string) = glob.as_string_lit() {
-                    if let Err(glob) = wax::Glob::new(&string.value) {
+                    let expression = string.value.strip_prefix('!').unwrap_or(&string.value); // strip the negation
+                    if let Err(glob) = wax::Glob::new(expression) {
                         diagnostics.push(Diagnostic {
                             message: format!("Invalid glob: {}", glob),
                             range: convert_ranges(&rope, collapse_string_range(string.range)),

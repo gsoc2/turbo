@@ -200,12 +200,18 @@ export function activate(context: ExtensionContext) {
   // If the extension is launched in debug mode then the debug server options are used
   // Otherwise the run options are used
 
+  let lspPath = Uri.joinPath(
+    context.extensionUri,
+    "out",
+    `turborepo-lsp-${process.platform}-${process.arch}`
+  ).fsPath;
+
   const serverOptions: ServerOptions = {
     run: {
-      command: "/home/arlyon/Programming/turbo/target/debug/turborepo-lsp",
+      command: lspPath,
     },
     debug: {
-      command: "/home/arlyon/Programming/turbo/target/debug/turborepo-lsp",
+      command: lspPath,
     },
   };
 
