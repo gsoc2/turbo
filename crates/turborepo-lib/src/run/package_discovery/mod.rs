@@ -6,6 +6,7 @@ use turborepo_repository::discovery::{DiscoveryResponse, Error, PackageDiscovery
 
 use crate::daemon::{proto::PackageManager, DaemonClient, FileWatching};
 
+#[derive(Debug)]
 pub struct DaemonPackageDiscovery<'a, C: Clone> {
     daemon: &'a mut DaemonClient<C>,
 }
@@ -69,7 +70,7 @@ impl PackageDiscovery for WatchingPackageDiscovery {
                 .watcher
                 .wait_for(|opt| opt.is_some())
                 .await
-                .map_err(|_| Error::Failed)?;
+                .map_err(|e| Error::Failed(e.to_string()))?;
             watcher.as_ref().expect("guaranteed some above").clone()
         };
 

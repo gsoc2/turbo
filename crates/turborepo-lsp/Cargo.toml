@@ -18,5 +18,7 @@ tower-lsp = { path = "../../../tower-lsp" }
 tower-uds = { version = "0.1.0", path = "../tower-uds" }
 tracing-subscriber = "0.3.18"
 tracing.workspace = true
+turbopath = { version = "0.1.0", path = "../turborepo-paths" }
 turborepo-lib = { version = "0.1.0", path = "../turborepo-lib" }
+turborepo-repository = { version = "0.1.0", path = "../turborepo-repository" }
 wax = { version = "0.5.0", path = "../turborepo-wax" }

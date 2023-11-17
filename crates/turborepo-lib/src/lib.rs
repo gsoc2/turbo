@@ -4,6 +4,7 @@
 #![feature(hash_extract_if)]
 #![feature(option_get_or_insert_default)]
 #![feature(once_cell_try)]
+#![feature(async_fn_in_trait)]
 #![deny(clippy::all)]
 // Clippy's needless mut lint is buggy: https://github.com/rust-lang/rust-clippy/issues/11299
 #![allow(clippy::needless_pass_by_ref_mut)]
@@ -32,7 +33,13 @@ mod tracing;
 pub use child::spawn_child;
 
 use crate::commands::CommandBase;
-pub use crate::{cli::Args, execution_state::ExecutionState, run::scope::TargetSelector};
+pub use crate::{
+    cli::Args,
+    commands::DaemonRootHasher,
+    daemon::{DaemonClient, DaemonConnector},
+    execution_state::ExecutionState,
+    run::{package_discovery::DaemonPackageDiscovery, scope::TargetSelector},
+};
 
 /// The payload from running main, if the program can complete without using Go
 /// the Rust variant will be returned. If Go is needed then the execution state

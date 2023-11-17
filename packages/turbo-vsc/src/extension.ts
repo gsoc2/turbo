@@ -123,7 +123,11 @@ export function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     commands.registerCommand("turbo.run", (args) => {
-      let terminal = window.createTerminal("turbo");
+      let terminal = window.createTerminal({
+        name: `${args}`,
+        isTransient: true,
+        iconPath: Uri.joinPath(context.extensionUri, "resources", "icon.svg"),
+      });
       terminal.sendText(`turbo run ${args}`);
       terminal.show();
     })
@@ -131,7 +135,11 @@ export function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     commands.registerCommand("turbo.codemod", (args) => {
-      let terminal = window.createTerminal("turbo");
+      let terminal = window.createTerminal({
+        name: "Turbo Codemod",
+        isTransient: true,
+        iconPath: Uri.joinPath(context.extensionUri, "resources", "icon.svg"),
+      });
       terminal.sendText(`npx --yes @turbo/codemod ${args}`);
       terminal.show();
     })
@@ -142,7 +150,6 @@ export function activate(context: ExtensionContext) {
       let terminal = window.createTerminal({
         name: "Install Turbo",
         isTransient: true,
-        message: "Installing Turbo CLI",
         iconPath: Uri.joinPath(context.extensionUri, "resources", "icon.svg"),
       });
       terminal.sendText(`npm i -g turbo && exit`);

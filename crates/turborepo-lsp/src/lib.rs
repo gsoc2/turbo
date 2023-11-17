@@ -1,19 +1,60 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 use itertools::Itertools;
 use jsonc_parser::CollectOptions;
 use serde_json::Value;
+use tokio::sync::Mutex as AsyncMutex;
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
+use turbopath::AbsoluteSystemPathBuf;
+use turborepo_lib::{DaemonClient, DaemonConnector, DaemonPackageDiscovery, DaemonRootHasher};
+use turborepo_repository::{
+    discovery::{PackageDiscovery, WorkspaceData},
+    package_json::PackageJson,
+};
 
 #[derive(Debug)]
 pub struct Backend {
     pub client: Client,
     files: Mutex<HashMap<Url, crop::Rope>>,
+    initializer: tokio::sync::watch::Sender<Option<Arc<AsyncMutex<DaemonClient<DaemonConnector>>>>>,
+    discovery: tokio::sync::watch::Receiver<Option<Arc<AsyncMutex<DaemonClient<DaemonConnector>>>>>,
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        if let Some(uri) = params.root_uri {
+            // convert uri file:///absolute-path to AbsoluteSystemPathBuf
+            let repo_root = AbsoluteSystemPathBuf::new(
+                uri.to_file_path().unwrap().as_os_str().to_str().unwrap(),
+            )
+            .unwrap();
+
+            let hasher = DaemonRootHasher::new(&repo_root);
+
+            let connector = DaemonConnector {
+                can_start_server: true,
+                can_kill_server: false,
+                pid_file: hasher.lock_path(),
+                sock_file: hasher.sock_path(),
+            };
+
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("root uri: {}", hasher.sock_path()),
+                )
+                .await;
+
+            let daemon = connector.connect().await.unwrap();
+            self.initializer
+                .send(Some(Arc::new(AsyncMutex::new(daemon))))
+                .expect("there is a receiver");
+        }
+
         Ok(InitializeResult {
             server_info: None,
             capabilities: ServerCapabilities {
@@ -56,9 +97,134 @@ impl LanguageServer for Backend {
                         },
                     },
                 )),
+                references_provider: Some(OneOf::Right(ReferencesOptions {
+                    work_done_progress_options: WorkDoneProgressOptions {
+                        work_done_progress: None,
+                    },
+                })),
                 ..ServerCapabilities::default()
             },
         })
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        self.client
+            .log_message(MessageType::INFO, "references!")
+            .await;
+
+        let tasks = {
+            let rope = {
+                let map = self.files.lock().unwrap();
+                match map.get(&params.text_document_position.text_document.uri) {
+                    Some(files) => files,
+                    None => return Ok(None),
+                }
+                .to_owned() // cloning is cheap
+            };
+
+            let text = rope.chunks().join("");
+            let parse = jsonc_parser::parse_to_ast(
+                &text,
+                &CollectOptions {
+                    comments: true,
+                    tokens: true,
+                },
+                &Default::default(),
+            );
+
+            // iterate pipeline items, and see if any of their ranges intersect
+            // with the reference request's position
+            let parse = match parse {
+                Ok(parse) => parse,
+                Err(_err) => {
+                    // todo: do we error here?
+                    return Ok(None);
+                }
+            };
+
+            let pipeline = parse
+                .value
+                .as_ref()
+                .and_then(|v| v.as_object())
+                .and_then(|o| o.get_object("pipeline"))
+                .map(|p| p.properties.iter())
+                .into_iter()
+                .flatten();
+
+            let mut tasks = vec![];
+            for task in pipeline {
+                let mut range = task.range;
+                range.start += 1; // account for quote
+                let key_range = range.start + task.name.as_str().len();
+                range.end = key_range;
+
+                // convert ast range to lsp range
+                let lsp_range = convert_ranges(&rope, range);
+
+                if lsp_range.start < params.text_document_position.position
+                    && lsp_range.end > params.text_document_position.position
+                {
+                    tasks.push(task.name.as_str().to_string());
+                }
+            }
+            tasks
+        };
+
+        self.client
+            .log_message(MessageType::INFO, format!("{:?}", tasks))
+            .await;
+
+        let packages = self.package_discovery().await;
+
+        let mut locations = vec![];
+        for wd in packages {
+            let data = std::fs::read_to_string(&wd.package_json).unwrap();
+            let package_json = PackageJson::from_str(&data).unwrap();
+            let scripts = package_json.scripts.into_keys().collect::<HashSet<_>>();
+
+            // todo: use jsonc_ast instead of text search
+            let rope = crop::Rope::from(data.clone());
+
+            for task in tasks.iter() {
+                let (package, task) = task
+                    .rsplit_once('#')
+                    .map(|(p, t)| (Some(p), t))
+                    .unwrap_or((None, task));
+
+                if let (Some(package), Some(package_name)) = (package, package_json.name.as_ref()) {
+                    if package_name != package {
+                        continue;
+                    }
+                };
+
+                let Some(start) = data.find(&format!("\"{}\"", task)) else {
+                    continue;
+                };
+                let end = start + task.len() + 2;
+
+                let start_line = rope.line_of_byte(start);
+                let end_line = rope.line_of_byte(end);
+
+                let range = Range {
+                    start: Position {
+                        line: start_line as u32,
+                        character: (start - rope.byte_of_line(start_line)) as u32,
+                    },
+                    end: Position {
+                        line: end_line as u32,
+                        character: (end - rope.byte_of_line(end_line)) as u32,
+                    },
+                };
+
+                if scripts.contains(task) {
+                    let mut location =
+                        Location::new(Url::from_file_path(&wd.package_json).unwrap(), range);
+                    locations.push(location);
+                }
+            }
+        }
+
+        Ok(Some(locations))
     }
 
     async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
@@ -263,19 +429,68 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
-        Ok(Some(CompletionResponse::Array(vec![
-            CompletionItem::new_simple("Hello".to_string(), "Some detail".to_string()),
-            CompletionItem::new_simple("Bye".to_string(), "More detail".to_string()),
-        ])))
+        let packages = self.package_discovery().await;
+
+        let tasks = packages
+            .iter()
+            .map(|wd| {
+                let package_json = PackageJson::load(&wd.package_json).unwrap();
+                package_json.scripts.into_keys()
+            })
+            .flatten()
+            .unique()
+            .map(|s| CompletionItem {
+                label: s,
+                kind: Some(CompletionItemKind::FIELD),
+                ..Default::default()
+            });
+
+        let keys = packages
+            .iter()
+            .map(|wd| {
+                let package_json = PackageJson::load(&wd.package_json).unwrap();
+                package_json
+                    .scripts
+                    .into_keys()
+                    .map(move |k| (package_json.name.clone(), k))
+            })
+            .flatten()
+            .map(|(package, s)| CompletionItem {
+                label: format!("{}#{}", package.unwrap_or_default(), s),
+                kind: Some(CompletionItemKind::FIELD),
+                ..Default::default()
+            });
+
+        Ok(Some(CompletionResponse::Array(keys.chain(tasks).collect())))
     }
 }
 
 impl Backend {
     pub fn new(client: Client) -> Self {
+        let (rx, tx) = tokio::sync::watch::channel(None);
+
         Self {
             client,
             files: Mutex::new(HashMap::new()),
+            initializer: rx,
+            discovery: tx,
         }
+    }
+
+    pub async fn package_discovery(&self) -> Vec<WorkspaceData> {
+        let arc = {
+            let mut discovery = self.discovery.clone();
+            let daemon = discovery.wait_for(|d| d.is_some()).await;
+            let daemon = daemon.as_ref().unwrap();
+            daemon.as_ref().unwrap().clone()
+        };
+
+        let mut daemon = arc.lock().await;
+
+        DaemonPackageDiscovery::new(&mut daemon)
+            .discover_packages()
+            .await
+            .unwrap()
     }
 
     /// Handle a file update to a rope, emitting diagnostics if necessary.
@@ -291,6 +506,20 @@ impl Backend {
 
         let contents = rope.chunks().join("");
         let mut diagnostics = vec![];
+
+        let packages = self.package_discovery().await;
+
+        let tasks = packages
+            .into_iter()
+            .map(|wd| {
+                let package_json = PackageJson::load(&wd.package_json).unwrap();
+                package_json
+                    .scripts
+                    .into_keys()
+                    .map(move |k| (k, package_json.name.clone()))
+            })
+            .flatten()
+            .into_group_map();
 
         {
             let parse =
@@ -325,17 +554,72 @@ impl Backend {
                 .map(|p| p.properties.iter());
 
             for property in pipeline.into_iter().flatten() {
-                let mut object_range = property.range;
-                object_range.start += 1; // account for quote
-                let object_key_range = object_range.start + property.name.as_str().len();
-                object_range.end = object_key_range;
+                let (package, task) = property
+                    .name
+                    .as_str()
+                    .rsplit_once('#')
+                    .map(|(p, t)| (Some(p), t))
+                    .unwrap_or((None, property.name.as_str()));
 
-                diagnostics.push(Diagnostic {
-                    message: "No associated tasks".to_string(),
-                    range: convert_ranges(&rope, object_range),
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    ..Default::default()
-                });
+                match (tasks.get(task), package) {
+                    // task exists and we have a package, then check it
+                    (Some(list), Some(package))
+                        if !list
+                            .iter()
+                            .filter_map(|s| s.as_ref().map(|s| s.as_str()))
+                            .contains(&package) =>
+                    {
+                        let mut object_range = property.range;
+                        object_range.start += 1; // account for quote
+                        let object_key_range = object_range.start + property.name.as_str().len();
+                        object_range.end = object_key_range;
+
+                        diagnostics.push(Diagnostic {
+                            message: format!(
+                                "The task `{}` does not exist in the package `{}`.",
+                                task, package
+                            ),
+                            range: convert_ranges(&rope, object_range),
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            ..Default::default()
+                        });
+                    }
+                    // the task doesn't exist anywhere, so we have a problem
+                    (None, None) => {
+                        let mut object_range = property.range;
+                        object_range.start += 1; // account for quote
+                        let object_key_range = object_range.start + property.name.as_str().len();
+                        object_range.end = object_key_range;
+
+                        diagnostics.push(Diagnostic {
+                            message: format!("The task `{}` does not exist.", task),
+                            range: convert_ranges(&rope, object_range),
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            ..Default::default()
+                        });
+                    }
+                    // we have specified a package, but the task doesn't exist at all
+                    (None, Some(package)) => {
+                        let mut object_range = property.range;
+                        object_range.start += 1; // account for quote
+                        let object_key_range = object_range.start + property.name.as_str().len();
+                        object_range.end = object_key_range;
+
+                        diagnostics.push(Diagnostic {
+                            message: format!(
+                                "The task `{}` does not exist in the package `{}`.",
+                                task, package
+                            ),
+                            range: convert_ranges(&rope, object_range),
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            ..Default::default()
+                        });
+                    }
+                    // task exists in a given package, so we're good
+                    (Some(_), Some(_)) => {}
+                    // the task exists and we haven't specified a package, so we're good
+                    (Some(_), None) => {}
+                }
 
                 globs.extend(
                     ["inputs", "outputs"]

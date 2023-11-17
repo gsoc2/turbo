@@ -31,7 +31,7 @@ pub enum Error {
     #[error("discovery unavailable")]
     Unavailable,
     #[error("discovery failed")]
-    Failed,
+    Failed(String),
 }
 
 /// Defines a strategy for discovering packages on the filesystem.
@@ -113,7 +113,7 @@ impl PackageDiscovery for LocalPackageDiscovery {
         iter(
             self.package_manager
                 .get_package_jsons(&self.repo_root)
-                .map_err(|_e| Error::Failed)?,
+                .map_err(|e| Error::Failed(e.to_string()))?,
         )
         .then(|a| async move {
             let potential_turbo = a.parent().expect("non-root").join_component("turbo.json");

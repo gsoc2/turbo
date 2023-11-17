@@ -169,8 +169,8 @@ pub enum DaemonError {
     #[error("error opening socket: {0}")]
     SocketOpen(#[from] SocketOpenError),
     /// The server is running a different version of turborepo.
-    #[error("version mismatch")]
-    VersionMismatch,
+    #[error("version mismatch: {0}")]
+    VersionMismatch(String),
     /// There is an issue with the underlying grpc transport.
     #[error("bad grpc transport: {0}")]
     GrpcTransport(#[from] tonic::transport::Error),
@@ -207,7 +207,9 @@ pub enum DaemonError {
 impl From<Status> for DaemonError {
     fn from(status: Status) -> DaemonError {
         match status.code() {
-            Code::FailedPrecondition | Code::Unimplemented => DaemonError::VersionMismatch,
+            Code::FailedPrecondition | Code::Unimplemented => {
+                DaemonError::VersionMismatch(status.message().to_string())
+            }
             Code::Unavailable => DaemonError::Unavailable,
             c => DaemonError::GrpcFailure(c),
         }

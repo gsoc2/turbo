@@ -10783,7 +10783,9 @@ dependencies = [
  "tower-uds",
  "tracing",
  "tracing-subscriber",
+ "turbopath",
  "turborepo-lib",
+ "turborepo-repository",
  "wax",
 ]
 
